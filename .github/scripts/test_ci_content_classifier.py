@@ -38,12 +38,14 @@ class CheckJob(TypedDict):
 
 
 BenchmarkJob = TypedDict('BenchmarkJob', {'needs': str, 'if': str})
+ConditionalJob = TypedDict('ConditionalJob', {'if': str})
 
 
 WORKFLOW_ADAPTER: TypeAdapter[Workflow] = TypeAdapter(Workflow)
 CLASSIFIER_JOB_ADAPTER: TypeAdapter[ClassifierJob] = TypeAdapter(ClassifierJob)
 CHECK_JOB_ADAPTER: TypeAdapter[CheckJob] = TypeAdapter(CheckJob)
 BENCHMARK_JOB_ADAPTER: TypeAdapter[BenchmarkJob] = TypeAdapter(BenchmarkJob)
+CONDITIONAL_JOB_ADAPTER: TypeAdapter[ConditionalJob] = TypeAdapter(ConditionalJob)
 
 
 def _workflow(path: Path = WORKFLOW) -> Workflow:
@@ -111,7 +113,18 @@ fi
     [
         ([('README.md', '')], {'content_only': 'true', 'docs_changed': 'true'}),
         ([('docs/guides/agents.md', '')], {'content_only': 'true', 'docs_changed': 'true'}),
+        ([('docs/AGENTS.md', '')], {'content_only': 'true', 'docs_changed': 'true'}),
+        ([('docs/img/logo.svg', '')], {'content_only': 'true', 'docs_changed': 'true'}),
+        ([('docs/navigation.yml', '')], {'content_only': 'true', 'docs_changed': 'true'}),
+        ([('pydantic_ai_slim/README.md', '')], {'content_only': 'true', 'docs_changed': 'true'}),
         ([('.agents/skills/review/SKILL.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('.agents/skills/review/references.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('.claude/skills/review/SKILL.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('agent_docs/index.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('CONTRIBUTING.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('.github/pull_request_template.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('.github/ISSUE_TEMPLATE/bug.yaml', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('src/pydantic_clai2/AGENTS.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
         (
             [('docs/agents.md', ''), ('.agents/skills/review/SKILL.md', '')],
             {'content_only': 'true', 'docs_changed': 'true'},
@@ -120,13 +133,47 @@ fi
             [('.agents/skills/review/SKILL.md', 'docs/review.md')],
             {'content_only': 'true', 'docs_changed': 'true'},
         ),
-        ([('.agents/skills/review/nested/SKILL.md', '')], {'content_only': 'false', 'docs_changed': 'false'}),
-        ([('.agents/skills/SKILL.md', '')], {'content_only': 'false', 'docs_changed': 'false'}),
-        ([('AGENTS.md', '')], {'content_only': 'false', 'docs_changed': 'false'}),
+        ([('.agents/skills/review/nested/SKILL.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('.agents/skills/SKILL.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        ([('AGENTS.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
+        (
+            [('tests/harness/skills/temporal_workspace/skills/reviewer/SKILL.md', '')],
+            {'content_only': 'false', 'docs_changed': 'false'},
+        ),
+        ([('.github/workflows/pydantic-ai-pr-review.md', '')], {'content_only': 'false', 'docs_changed': 'false'}),
+        ([('.github/workflows/ci.yml', '')], {'content_only': 'false', 'docs_changed': 'false'}),
+        ([('pyproject.toml', '')], {'content_only': 'false', 'docs_changed': 'false'}),
         ([('src/code.py', 'docs/old.md')], {'content_only': 'false', 'docs_changed': 'true'}),
     ],
 )
-def test_classifies_published_docs_and_instruction_skills(
+def test_classifies_content_without_python_test_impact(
+    tmp_path: Path, changed_files: list[tuple[str, str]], expected: dict[str, str]
+):
+    outputs = _classify(tmp_path, changed_files)
+
+    assert {key: outputs[key] for key in expected} == expected
+    if expected['content_only'] == 'true':
+        assert outputs['skip_python_tests'] == 'true'
+
+
+@pytest.mark.parametrize(
+    ('changed_files', 'expected'),
+    [
+        ([('.github/workflows/benchmark.yml', '')], {'skip_python_tests': 'true', 'docs_changed': 'false'}),
+        ([('.github/workflows/pydantic-ai-pr-review.md', '')], {'skip_python_tests': 'true', 'docs_changed': 'false'}),
+        (
+            [('docs/agent.md', ''), ('.github/workflows/benchmark.yml', '')],
+            {'skip_python_tests': 'true', 'docs_changed': 'true'},
+        ),
+        ([('.github/workflows/ci.yml', '')], {'skip_python_tests': 'false', 'docs_changed': 'false'}),
+        ([('pyproject.toml', '')], {'skip_python_tests': 'false', 'docs_changed': 'false'}),
+        (
+            [('.github/workflows/benchmark.yml', ''), ('src/code.py', '')],
+            {'skip_python_tests': 'false', 'docs_changed': 'false'},
+        ),
+    ],
+)
+def test_workflow_changes_keep_focused_checks_without_python_matrix(
     tmp_path: Path, changed_files: list[tuple[str, str]], expected: dict[str, str]
 ):
     outputs = _classify(tmp_path, changed_files)
@@ -164,6 +211,7 @@ def test_incomplete_pr_file_list_defaults_to_full_ci(
     assert outputs == {
         'content_only': 'false',
         'docs_changed': 'false',
+        'skip_python_tests': 'false',
         'clai2_only': 'false',
         'pyright_changed': 'true',
     }
@@ -175,6 +223,7 @@ def test_non_pr_events_keep_full_ci_defaults(tmp_path: Path):
     assert outputs == {
         'content_only': 'false',
         'docs_changed': 'false',
+        'skip_python_tests': 'false',
         'clai2_only': 'false',
         'pyright_changed': 'true',
     }
@@ -185,6 +234,10 @@ def test_non_pr_events_keep_full_ci_defaults(tmp_path: Path):
     [
         ([('.agents/skills/review/SKILL.md', '')], 'true'),
         ([('docs/guide.md', '')], 'true'),
+        ([('docs/img/logo.svg', '')], 'true'),
+        ([('.github/ISSUE_TEMPLATE/bug.yaml', '')], 'true'),
+        ([('AGENTS.md', '')], 'true'),
+        ([('.github/workflows/ci.yml', '')], 'false'),
         ([('docs/guide.md', ''), ('src/code.py', '')], 'false'),
         ([('.agents/skills/review/SKILL.md', 'docs/guide.md')], 'true'),
     ],
@@ -233,22 +286,49 @@ def test_benchmark_job_is_gated_on_the_classifier_output():
     assert benchmark['if'] == "needs.classify.outputs.content_only != 'true'"
 
 
+def test_python_test_jobs_use_the_test_impact_output():
+    jobs = _workflow()['jobs']
+    for name in (
+        'mypy',
+        'test',
+        'test-all-extras',
+        'test-durable-exec',
+        'test-lowest-versions',
+        'test-temporal-latest',
+        'test-examples',
+        'test-fastmcp-4',
+        'test-harness-browser-use',
+        'coverage',
+    ):
+        job = CONDITIONAL_JOB_ADAPTER.validate_python(jobs[name])
+        assert "needs.classify.outputs.skip_python_tests != 'true'" in job['if']
+
+    quality = CONDITIONAL_JOB_ADAPTER.validate_python(jobs['quality'])
+    assert quality['if'] == "needs.classify.outputs.content_only != 'true'"
+
+
 def test_aggregate_requires_the_selected_lightweight_job():
     check = CHECK_JOB_ADAPTER.validate_python(_workflow()['jobs']['check'])
-    assert 'instructions-only' in check['needs']
+    assert 'content-checks' in check['needs']
     allowed_skips = check['steps'][0]['with']['allowed-skips']
 
     branches = re.findall(r"(?:&&|\|\|)\s*'([^']+)'", allowed_skips)
     docs_skips = set(branches[0].split(','))
-    instruction_skips = set(branches[1].split(','))
-    clai2_skips = set(branches[2].split(','))
-    tag_skips = set(branches[3].split(','))
-    default_skips = set(branches[4].split(','))
+    content_skips = set(branches[1].split(','))
+    workflow_docs_skips = set(branches[2].split(','))
+    workflow_skips = set(branches[3].split(','))
+    clai2_skips = set(branches[4].split(','))
+    tag_skips = set(branches[5].split(','))
+    default_skips = set(branches[6].split(','))
 
-    assert 'instructions-only' in docs_skips
+    assert 'content-checks' in docs_skips
     assert 'docs-only' not in docs_skips
-    assert {'docs-only', 'docs-assets'} <= instruction_skips
-    assert 'instructions-only' not in instruction_skips
-    assert {'docs-only', 'instructions-only'} <= clai2_skips
-    assert {'docs-only', 'instructions-only'} <= tag_skips
-    assert {'docs-only', 'instructions-only'} <= default_skips
+    assert {'docs-only', 'docs-assets'} <= content_skips
+    assert 'content-checks' not in content_skips
+    assert {'mypy', 'test', 'coverage', 'content-checks'} <= workflow_docs_skips
+    assert not {'quality', 'docs-only', 'docs-assets'} & workflow_docs_skips
+    assert {'docs-only', 'docs-assets'} <= workflow_skips
+    assert 'quality' not in workflow_skips
+    assert {'docs-only', 'content-checks'} <= clai2_skips
+    assert {'docs-only', 'content-checks'} <= tag_skips
+    assert {'docs-only', 'content-checks'} <= default_skips

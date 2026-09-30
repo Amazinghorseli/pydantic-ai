@@ -47,6 +47,7 @@ jobs:
     outputs:
       content_only: ${{ steps.classify.outputs.content_only }}
       docs_changed: ${{ steps.classify.outputs.docs_changed }}
+      skip_python_tests: ${{ steps.classify.outputs.skip_python_tests }}
       clai2_only: ${{ steps.classify.outputs.clai2_only }}
       pyright_changed: ${{ steps.classify.outputs.pyright_changed }}
     steps:
@@ -56,9 +57,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # Keep classification inline so this token-bearing job never executes PR-authored files.
           run_all_checks() {
             echo 'content_only=false' >> "$GITHUB_OUTPUT"
             echo 'docs_changed=false' >> "$GITHUB_OUTPUT"
+            echo 'skip_python_tests=false' >> "$GITHUB_OUTPUT"
             echo 'clai2_only=false' >> "$GITHUB_OUTPUT"
             echo 'pyright_changed=true' >> "$GITHUB_OUTPUT"
           }
@@ -97,18 +100,36 @@ jobs:
             exit 0
           fi
 
-          is_published_docs_markdown() {
+          needs_docs_checks() {
+            # `test_examples.py` also scans Markdown under the published package directories.
             case "$1" in
-              README.md|docs/*.md|examples/*.md) ;;
+              README.md|docs/navigation.yml|clai/README.md|src/pydantic_clai2/README.md|src/pydantic_ai_harness/README.md) ;;
+              docs/*.md|docs/*.mdc|docs/*.png|docs/*.svg|docs/*.ico|docs/*.jpg|docs/*.jpeg|docs/*.gif|docs/*.webp|docs/*.avif) ;;
+              examples/*.md|pydantic_ai_slim/*.md|pydantic_graph/*.md|pydantic_evals/*.md) ;;
               *) return 1 ;;
-            esac
-            case "$1" in
-              AGENTS.md|CLAUDE.md|*/AGENTS.md|*/CLAUDE.md) return 1 ;;
             esac
           }
 
-          is_instruction_skill() {
-            [[ "$1" =~ ^\.agents/skills/[^/]+/SKILL\.md$ ]]
+          is_non_test_content() {
+            if needs_docs_checks "$1"; then
+              return 0
+            fi
+            case "$1" in
+              .agents/*.md|.claude/*.md|agent_docs/*.md|.macroscope/*.md|*/AGENTS.md|*/CLAUDE.md) return 0 ;;
+              .github/pull_request_template.md|.github/ISSUE_TEMPLATE/*.md|.github/ISSUE_TEMPLATE/*.yaml|.github/ISSUE_TEMPLATE/*.yml) return 0 ;;
+              .github/dependabot.yml|.github/release.yml|.github/zizmor.yml|.github/CODEOWNERS|.github/FUNDING.yml) return 0 ;;
+              *.md) [[ "$1" != */* ]] ;;
+              *) return 1 ;;
+            esac
+          }
+
+          is_other_workflow() {
+            # Changes to this workflow need the matrix they control; other workflows keep quality checks.
+            case "$1" in
+              .github/workflows/ci.yml) return 1 ;;
+              .github/workflows/*.yml|.github/workflows/*.md) ;;
+              *) return 1 ;;
+            esac
           }
 
           # Nothing outside `pydantic-clai2` imports it, so a change confined to these paths cannot
@@ -133,16 +154,21 @@ jobs:
 
           content_only=true
           docs_changed=false
+          skip_python_tests=true
           clai2_only=true
           pyright_changed=false
           for changed_file in "${changed_files[@]}"; do
             IFS=$'\t' read -r filename previous_filename <<< "$changed_file"
-            if { ! is_published_docs_markdown "$filename" && ! is_instruction_skill "$filename"; } || \
-              { [ -n "$previous_filename" ] && ! is_published_docs_markdown "$previous_filename" && ! is_instruction_skill "$previous_filename"; }; then
+            if ! is_non_test_content "$filename" || \
+              { [ -n "$previous_filename" ] && ! is_non_test_content "$previous_filename"; }; then
               content_only=false
             fi
-            if is_published_docs_markdown "$filename" || \
-              { [ -n "$previous_filename" ] && is_published_docs_markdown "$previous_filename"; }; then
+            if { ! is_non_test_content "$filename" && ! is_other_workflow "$filename"; } || \
+              { [ -n "$previous_filename" ] && ! is_non_test_content "$previous_filename" && ! is_other_workflow "$previous_filename"; }; then
+              skip_python_tests=false
+            fi
+            if needs_docs_checks "$filename" || \
+              { [ -n "$previous_filename" ] && needs_docs_checks "$previous_filename"; }; then
               docs_changed=true
             fi
             if ! is_clai2 "$filename" || \
@@ -156,6 +182,7 @@ jobs:
           done
           echo "content_only=$content_only" >> "$GITHUB_OUTPUT"
           echo "docs_changed=$docs_changed" >> "$GITHUB_OUTPUT"
+          echo "skip_python_tests=$skip_python_tests" >> "$GITHUB_OUTPUT"
           echo "clai2_only=$clai2_only" >> "$GITHUB_OUTPUT"
           echo "pyright_changed=$pyright_changed" >> "$GITHUB_OUTPUT"
 
@@ -355,7 +382,7 @@ jobs:
   # mypy and quality checks are a bit slower than other jobs, so we run them separately
   mypy:
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -376,7 +403,7 @@ jobs:
   # Keep this source-repository check for assets that live alongside Pydantic AI docs.
   docs-assets:
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' || needs.classify.outputs.docs_changed == 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' || needs.classify.outputs.docs_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -406,7 +433,7 @@ jobs:
   docs-only:
     name: docs-only checks on Python 3.13
     needs: classify
-    if: needs.classify.outputs.content_only == 'true' && needs.classify.outputs.docs_changed == 'true'
+    if: needs.classify.outputs.skip_python_tests == 'true' && needs.classify.outputs.docs_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -439,8 +466,8 @@ jobs:
       - name: Test documentation snippets
         run: uv run --no-sync pytest tests/test_examples.py -n logical --dist=loadgroup
 
-  instructions-only:
-    name: instruction text checks
+  content-checks:
+    name: content checks
     needs: classify
     if: needs.classify.outputs.content_only == 'true' && needs.classify.outputs.docs_changed != 'true'
     runs-on: ubuntu-latest
@@ -454,12 +481,12 @@ jobs:
         with:
           extra_args: --all-files --verbose
         env:
-          SKIP: no-commit-to-branch,check-yaml,check-toml,check-added-large-files,zizmor,clai-help,format,lint,check-cassettes
+          SKIP: no-commit-to-branch,clai-help,format,lint,check-cassettes
 
   test:
     name: test on ${{ matrix.python-version }} (${{ matrix.install.name }})
     needs: classify
-    if: needs.classify.outputs.content_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -593,7 +620,7 @@ jobs:
   test-all-extras:
     name: test on ${{ matrix.python-version }} (all-extras, shard ${{ matrix.shard }}/2)
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -746,7 +773,7 @@ jobs:
   test-durable-exec:
     name: test durable-exec on ${{ matrix.python-version }} (${{ matrix.resolution }})
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -866,7 +893,7 @@ jobs:
   test-lowest-versions:
     name: test on ${{ matrix.python-version }} (lowest-versions, shard ${{ matrix.shard }}/2)
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -986,7 +1013,7 @@ jobs:
   test-temporal-latest:
     name: test Temporal latest on Python 3.10
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1012,7 +1039,7 @@ jobs:
   test-examples:
     name: test examples on ${{ matrix.python-version }}
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -1041,7 +1068,7 @@ jobs:
   test-harness-browser-use:
     name: test harness browser-use
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -1070,7 +1097,7 @@ jobs:
   test-fastmcp-4:
     name: test FastMCP 4 compatibility
     needs: classify
-    if: needs.classify.outputs.content_only != 'true' && needs.classify.outputs.clai2_only != 'true'
+    if: needs.classify.outputs.skip_python_tests != 'true' && needs.classify.outputs.clai2_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -1294,7 +1321,7 @@ jobs:
     needs: [classify, test, test-all-extras, test-durable-exec, test-lowest-versions, test-fastmcp-4]
     # A `pydantic-clai2`-only change skips every test job but `test`, and a skipped need would
     # otherwise skip this job too.
-    if: ${{ !failure() && !cancelled() && needs.classify.outputs.content_only != 'true' }}
+    if: ${{ !failure() && !cancelled() && needs.classify.outputs.skip_python_tests != 'true' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -1339,7 +1366,7 @@ jobs:
       - mypy
       - docs-assets
       - docs-only
-      - instructions-only
+      - content-checks
       - test
       - test-all-extras
       - test-durable-exec
@@ -1362,9 +1389,9 @@ jobs:
         with:
           # The canary is advisory because it tests dependency versions we do not lock; its failures
           # signal upstream drift rather than release blockers. It runs on tag refs only, and
-          # `docs-only` covers published Markdown changes; `instructions-only` covers skill-only
-          # changes. Each lightweight path must run its selected check, while full CI jobs may skip
-          # only on either reduced PR path.
+          # `docs-only` covers published docs and assets; `content-checks` covers other
+          # non-test content. Other workflow changes keep quality checks but skip the test matrix.
+          # Each reduced path must run its selected checks.
           # The harness integration jobs run only when their paths change (always on tags), and
           # LocalStack also skips where its secret is unreadable.
           allowed-failures: latest-versions-canary
@@ -1372,15 +1399,21 @@ jobs:
             ${{
               needs.classify.outputs.content_only == 'true'
               && needs.classify.outputs.docs_changed == 'true'
-              && 'quality,mypy,test,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration,latest-versions-canary,coverage,instructions-only'
+              && 'quality,mypy,test,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration,latest-versions-canary,coverage,content-checks'
               || needs.classify.outputs.content_only == 'true'
               && needs.classify.outputs.docs_changed != 'true'
               && 'quality,mypy,test,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration,latest-versions-canary,coverage,docs-only,docs-assets'
+              || needs.classify.outputs.skip_python_tests == 'true'
+              && needs.classify.outputs.docs_changed == 'true'
+              && 'mypy,test,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration,latest-versions-canary,coverage,content-checks'
+              || needs.classify.outputs.skip_python_tests == 'true'
+              && needs.classify.outputs.docs_changed != 'true'
+              && 'mypy,test,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration,latest-versions-canary,coverage,content-checks,docs-only,docs-assets'
               || needs.classify.outputs.clai2_only == 'true'
-              && 'docs-only,instructions-only,mypy,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,latest-versions-canary,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration'
+              && 'docs-only,content-checks,mypy,test-all-extras,test-durable-exec,test-lowest-versions,test-temporal-latest,test-examples,test-fastmcp-4,test-harness-browser-use,latest-versions-canary,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration'
               || github.ref_type == 'tag'
-              && 'docs-only,instructions-only,harness-integration-changes,harness-localstack-integration'
-              || 'docs-only,instructions-only,latest-versions-canary,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration'
+              && 'docs-only,content-checks,harness-integration-changes,harness-localstack-integration'
+              || 'docs-only,content-checks,latest-versions-canary,harness-integration-changes,harness-localstack-integration,harness-mongodb-integration,harness-redis-integration'
             }}
           jobs: ${{ toJSON(needs) }}
 
