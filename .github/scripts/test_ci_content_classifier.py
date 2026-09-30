@@ -170,6 +170,7 @@ def test_classifies_content_without_python_test_impact(
     ('changed_files', 'expected'),
     [
         ([('.github/workflows/benchmark.yml', '')], {'skip_python_tests': 'true', 'docs_changed': 'false'}),
+        ([('.github/workflows/example.yaml', '')], {'skip_python_tests': 'true', 'docs_changed': 'false'}),
         ([('.github/workflows/pydantic-ai-pr-review.md', '')], {'skip_python_tests': 'true', 'docs_changed': 'false'}),
         (
             [('docs/agent.md', ''), ('.github/workflows/benchmark.yml', '')],

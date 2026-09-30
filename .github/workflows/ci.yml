@@ -130,7 +130,7 @@ jobs:
             # Changes to this workflow need the matrix they control; other workflows keep quality checks.
             case "$1" in
               .github/workflows/ci.yml) return 1 ;;
-              .github/workflows/*.yml|.github/workflows/*.md) ;;
+              .github/workflows/*.yml|.github/workflows/*.yaml|.github/workflows/*.md) ;;
               *) return 1 ;;
             esac
           }
