@@ -111,6 +111,9 @@ jobs:
           }
 
           is_non_test_content() {
+            case "$1" in
+              tests/*) return 1 ;;
+            esac
             if needs_docs_checks "$1"; then
               return 0
             fi
@@ -464,7 +467,7 @@ jobs:
           UV_NO_SYNC: "1"
 
       - name: Test documentation snippets
-        run: uv run --no-sync pytest tests/test_examples.py -n logical --dist=loadgroup
+        run: uv run --no-sync pytest tests/test_examples.py tests/harness/test_docs_installation.py -n logical --dist=loadgroup
 
   content-checks:
     name: content checks

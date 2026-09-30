@@ -73,6 +73,9 @@ jobs:
           }
 
           is_non_test_content() {
+            case "$1" in
+              tests/*) return 1 ;;
+            esac
             if needs_docs_checks "$1"; then
               return 0
             fi

@@ -37,6 +37,10 @@ class CheckJob(TypedDict):
     steps: list[CheckStep]
 
 
+class JobSteps(TypedDict):
+    steps: list[dict[str, object]]
+
+
 BenchmarkJob = TypedDict('BenchmarkJob', {'needs': str, 'if': str})
 ConditionalJob = TypedDict('ConditionalJob', {'if': str})
 
@@ -44,6 +48,7 @@ ConditionalJob = TypedDict('ConditionalJob', {'if': str})
 WORKFLOW_ADAPTER: TypeAdapter[Workflow] = TypeAdapter(Workflow)
 CLASSIFIER_JOB_ADAPTER: TypeAdapter[ClassifierJob] = TypeAdapter(ClassifierJob)
 CHECK_JOB_ADAPTER: TypeAdapter[CheckJob] = TypeAdapter(CheckJob)
+JOB_STEPS_ADAPTER: TypeAdapter[JobSteps] = TypeAdapter(JobSteps)
 BENCHMARK_JOB_ADAPTER: TypeAdapter[BenchmarkJob] = TypeAdapter(BenchmarkJob)
 CONDITIONAL_JOB_ADAPTER: TypeAdapter[ConditionalJob] = TypeAdapter(ConditionalJob)
 
@@ -117,6 +122,7 @@ fi
         ([('docs/img/logo.svg', '')], {'content_only': 'true', 'docs_changed': 'true'}),
         ([('docs/navigation.yml', '')], {'content_only': 'true', 'docs_changed': 'true'}),
         ([('pydantic_ai_slim/README.md', '')], {'content_only': 'true', 'docs_changed': 'true'}),
+        ([('src/pydantic_ai_harness/README.md', '')], {'content_only': 'true', 'docs_changed': 'true'}),
         ([('.agents/skills/review/SKILL.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
         ([('.agents/skills/review/references.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
         ([('.claude/skills/review/SKILL.md', '')], {'content_only': 'true', 'docs_changed': 'false'}),
@@ -139,6 +145,10 @@ fi
         (
             [('tests/harness/skills/temporal_workspace/skills/reviewer/SKILL.md', '')],
             {'content_only': 'false', 'docs_changed': 'false'},
+        ),
+        (
+            [('tests/harness/repo_context/fixtures/AGENTS.md', '')],
+            {'content_only': 'false', 'docs_changed': 'false', 'skip_python_tests': 'false'},
         ),
         ([('.github/workflows/pydantic-ai-pr-review.md', '')], {'content_only': 'false', 'docs_changed': 'false'}),
         ([('.github/workflows/ci.yml', '')], {'content_only': 'false', 'docs_changed': 'false'}),
@@ -237,6 +247,7 @@ def test_non_pr_events_keep_full_ci_defaults(tmp_path: Path):
         ([('docs/img/logo.svg', '')], 'true'),
         ([('.github/ISSUE_TEMPLATE/bug.yaml', '')], 'true'),
         ([('AGENTS.md', '')], 'true'),
+        ([('tests/harness/repo_context/fixtures/AGENTS.md', '')], 'false'),
         ([('.github/workflows/ci.yml', '')], 'false'),
         ([('docs/guide.md', ''), ('src/code.py', '')], 'false'),
         ([('.agents/skills/review/SKILL.md', 'docs/guide.md')], 'true'),
@@ -305,6 +316,15 @@ def test_python_test_jobs_use_the_test_impact_output():
 
     quality = CONDITIONAL_JOB_ADAPTER.validate_python(jobs['quality'])
     assert quality['if'] == "needs.classify.outputs.content_only != 'true'"
+
+
+def test_docs_checks_cover_harness_readmes():
+    docs_job = JOB_STEPS_ADAPTER.validate_python(_workflow()['jobs']['docs-only'])
+    snippet_steps = [step for step in docs_job['steps'] if step.get('name') == 'Test documentation snippets']
+    assert len(snippet_steps) == 1
+    command = snippet_steps[0].get('run')
+    assert isinstance(command, str)
+    assert 'tests/harness/test_docs_installation.py' in command
 
 
 def test_aggregate_requires_the_selected_lightweight_job():
